@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Live Dither Lab</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0d10; color:#e8eef6; }
+    header { padding: 14px 16px; border-bottom: 1px solid #1f2a37; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+    header h1 { margin:0; font-size: 16px; font-weight: 650; letter-spacing: .2px; }
+    header .sub { color:#9fb0c4; font-size: 12px; }
+    header .attribution { margin-left:auto; font-size: 12px; color:#9fb0c4; white-space: nowrap; }
+    header .attribution a { color:#7ab8f5; text-decoration: none; }
+    header .attribution a:hover { text-decoration: underline; }
+    .wrap { display:grid; grid-template-columns: 360px 1fr; gap: 12px; padding: 12px; }
+    .panel { background:#0f141b; border:1px solid #1f2a37; border-radius: 14px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+    .panel h2 { margin:0 0 10px 0; font-size: 13px; color:#cfe2ff; font-weight: 650; }
+    .row { display:flex; gap:10px; align-items:center; margin: 10px 0; flex-wrap: wrap; }
+    button {
+      background:#1a2432; color:#e8eef6; border:1px solid #2a3a52; border-radius: 10px;
+      padding: 9px 10px; cursor:pointer; font-weight: 600; font-size: 13px;
+    }
+    button:hover:not(:disabled) { background:#223044; border-color:#3a5070; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    button.accent { background:#1a3352; border-color:#2a5080; color:#cfe2ff; }
+    button.accent:hover:not(:disabled) { background:#204060; }
+    select, input[type="range"], input[type="number"] {
+      background:#0b0f15; color:#e8eef6; border:1px solid #2a3a52; border-radius: 10px; padding: 8px 10px;
+    }
+    input[type="checkbox"] { transform: scale(1.05); }
+    input[type="file"] { display:none; }
+    label { font-size: 12px; color:#c2d0e0; display:flex; gap:8px; align-items:center; }
+    .hint { font-size: 12px; color:#9fb0c4; line-height: 1.35; }
+    .kv { display:grid; grid-template-columns: 1fr auto; gap:8px; padding: 8px 10px; border: 1px solid #1f2a37; border-radius: 12px; background:#0b0f15; }
+    .kv div:last-child { color:#cfe2ff; font-variant-numeric: tabular-nums; }
+    .stage { background:#07090c; border:1px solid #1f2a37; border-radius: 14px; padding: 12px; display:flex; flex-direction: column; gap:10px; }
+    canvas { width: 100%; height: auto; border-radius: 12px; background:#000; border:1px solid #1f2a37; image-rendering: pixelated; }
+    .small { font-size: 11px; color:#8ea2bb; }
+    .badge { display:inline-flex; align-items:center; gap:6px; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a52; background:#0b0f15; color:#cfe2ff; font-size: 11px; }
+    .danger { color:#ffb4b4; }
+    .sep { border-top: 1px solid #1f2a37; margin: 12px 0; }
+    @media (max-width: 980px) {
+      .wrap { grid-template-columns: 1fr; }
+      header .attribution { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Live Dither Lab</h1>
+  <div class="sub">Screen Capture / Image &amp; Video Upload → Canvas → Dither</div>
+  <div class="attribution">
+    Built for <a href="https://www.youtube.com/watch?v=kT4p1GXq4HY" target="_blank" rel="noopener">Matt Parker's dithering video ↗</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h2>Input Source</h2>
+
+    <div class="row">
+      <button id="startBtn" class="accent">Start Screen Capture</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+
+    <div class="row">
+      <button id="uploadImgBtn">Upload Image…</button>
+      <input id="uploadImgFile" type="file" accept="image/*" />
+      <button id="uploadVidBtn">Upload Video…</button>
+      <input id="uploadVidFile" type="file" accept="video/*" />
+    </div>
+
+    <div class="sep"></div>
+    <h2>Dither Settings</h2>
+
+    <div class="row">
+      <label>
+        Method
+        <select id="methodSel">
+          <option value="bayer">Bayer (ordered)</option>
+          <option value="floyd">Floyd–Steinberg (error diffusion)</option>
+          <option value="atkinson">Atkinson (error diffusion)</option>
+          <option value="stucki">Stucki (error diffusion)</option>
+          <option value="jjn">Jarvis–Judice–Ninke (error diffusion)</option>
+          <option value="sierra">Sierra (error diffusion)</option>
+          <option value="blue">Blue Noise (tile)</option>
+          <option value="parker">Parker (progressive blue-noise mask)</option>
+          <option value="gol">Game of Life (dynamic mask)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
+        Levels: <span id="levelsVal" class="badge">2</span>
+        <input id="levels" type="range" min="2" max="8" step="1" value="2" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
+        Scale (Performance): <span id="scaleVal" class="badge">0.50×</span>
+        <input id="scale" type="range" min="0.25" max="1" step="0.05" value="0.5" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
+        Gamma (Input): <span id="gammaVal" class="badge">1.00</span>
+        <input id="gamma" type="range" min="0.6" max="2.2" step="0.05" value="1.0" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
+        Threshold: <span id="thresholdVal" class="badge">0.50</span>
+        <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.5" style="flex:1" />
+      </label>
+    </div>
+    <div class="row">
+      <label><input id="autoThr" type="checkbox" /> Auto-Threshold (balance black/white for binary)</label>
+    </div>
+
+    <div class="row">
+      <label><input id="invert" type="checkbox" /> Invert</label>
+    </div>
+    <div class="row" data-method="floyd atkinson stucki jjn sierra">
+      <label><input id="serp" type="checkbox" checked /> Serpentine scan</label>
+    </div>
+    <div class="row" data-method="blue">
+      <label><input id="animateBlue" type="checkbox" /> Animate tile</label>
+    </div>
+
+    <div class="row" data-method="gol">
+      <label style="flex:1">
+        GoL Grid: <span id="golSizeVal" class="badge">96</span>
+        <input id="golSize" type="range" min="32" max="192" step="16" value="96" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row" data-method="gol">
+      <label style="flex:1">
+        GoL Update (frames): <span id="golUpdVal" class="badge">2</span>
+        <input id="golUpd" type="range" min="1" max="10" step="1" value="2" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row" data-method="bayer blue parker">
+      <label style="flex:1">
+        Mask Size: <span id="maskVal" class="badge">64</span>
+        <input id="maskSize" type="range" min="16" max="128" step="16" value="64" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="hint" id="methodHint" style="margin-top:10px"></div>
+
+    <div style="margin-top:12px" class="kv">
+      <div>FPS (approx)</div><div id="fps">—</div>
+      <div>Input</div><div id="dims">—</div>
+      <div>Status</div><div id="status">idle</div>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <button id="saveBtn" disabled>Save Frame</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="row" style="justify-content:space-between; margin:0">
+      <div class="badge" id="badge">no stream</div>
+      <div class="small">Canvas output – pixelated scaling active</div>
+    </div>
+    <canvas id="out"></canvas>
+  </div>
+</div>
+
+<video id="vid" autoplay playsinline muted loop style="display:none"></video>
+<img id="srcImg" style="display:none" alt="" />
+
+<script>
+(() => {
+  // ── DOM refs ──────────────────────────────────────────────────────────────
+  const startBtn      = document.getElementById('startBtn');
+  const stopBtn       = document.getElementById('stopBtn');
+  const uploadImgBtn  = document.getElementById('uploadImgBtn');
+  const uploadImgFile = document.getElementById('uploadImgFile');
+  const uploadVidBtn  = document.getElementById('uploadVidBtn');
+  const uploadVidFile = document.getElementById('uploadVidFile');
+  const methodSel     = document.getElementById('methodSel');
+  const levelsEl      = document.getElementById('levels');
+  const levelsVal     = document.getElementById('levelsVal');
+  const scaleEl       = document.getElementById('scale');
+  const scaleVal      = document.getElementById('scaleVal');
+  const gammaEl       = document.getElementById('gamma');
+  const gammaVal      = document.getElementById('gammaVal');
+  const thresholdEl   = document.getElementById('threshold');
+  const thresholdVal  = document.getElementById('thresholdVal');
+  const autoThrEl     = document.getElementById('autoThr');
+  const invertEl      = document.getElementById('invert');
+  const serpEl        = document.getElementById('serp');
+  const animateBlueEl = document.getElementById('animateBlue');
+  const golSizeEl     = document.getElementById('golSize');
+  const golSizeVal    = document.getElementById('golSizeVal');
+  const golUpdEl      = document.getElementById('golUpd');
+  const golUpdVal     = document.getElementById('golUpdVal');
+  const maskSizeEl    = document.getElementById('maskSize');
+  const maskVal       = document.getElementById('maskVal');
+  const saveBtn       = document.getElementById('saveBtn');
+  const fpsEl         = document.getElementById('fps');
+  const dimsEl        = document.getElementById('dims');
+  const statusEl      = document.getElementById('status');
+  const badgeEl       = document.getElementById('badge');
+  const hintEl        = document.getElementById('methodHint');
+  const video         = document.getElementById('vid');
+  const srcImg        = document.getElementById('srcImg');
+  const out           = document.getElementById('out');
+  const outCtx        = out.getContext('2d', { willReadFrequently: true });
+  const off           = document.createElement('canvas');
+  const offCtx        = off.getContext('2d', { willReadFrequently: true });
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let stream  = null;
+  let rafId   = null;
+  let running = false;
+  let srcMode = 'screen';   // 'screen' | 'image' | 'video'
+  let lastT   = performance.now();
+  let frames  = 0;
+
+  // Per-frame reusable buffers (avoid GC pressure at 30 fps)
+  let lumBuf     = null;   // Float32Array  – gamma-corrected luminance
+  let outDataBuf = null;   // Uint8ClampedArray – output RGBA
+  let outImgData = null;   // ImageData wrapping outDataBuf
+
+  // Gamma LUT: 256 floats, recomputed only when gamma slider changes
+  let cachedGamma = -1;
+  const gammaLUT  = new Float32Array(256);
+
+  // Dither masks
+  let bayer      = null;   // Float32Array, values 0..1
+  let blueTile   = null;
+  let parkerTile = null;
+  let gol        = null;   // { n, grid, next, thresholds, step, frameCounter }
+
+  // ── Method hints ──────────────────────────────────────────────────────────
+  const METHOD_HINTS = {
+    bayer:    'Bayer: ordered dither with a periodic threshold matrix. Fast; may show a visible grid pattern.',
+    floyd:    'Floyd–Steinberg: error-diffusion. Spreads quantisation error to 4 neighbours (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right). Serpentine mode reduces directional bias.',
+    atkinson: 'Atkinson: error-diffusion that propagates only ¾ of the error (6×1/8 spread). Gives high-contrast, punchy results — the classic Mac/HyperCard look.',
+    stucki:   'Stucki: wide 5×3 error-diffusion kernel with gentler fall-off than JJN. Excellent gradient smoothness with minimal banding.',
+    jjn:      'Jarvis–Judice–Ninke: 5×3 error-diffusion kernel (48 total weight). Very smooth gradients; highest quality of the classic kernels.',
+    sierra:   'Sierra-3: 5×3 error-diffusion kernel (32 total weight). Slightly faster than JJN with comparable quality.',
+    blue:     'Blue Noise: thresholds from a high-frequency noise tile. Optionally animated for less banding and a more organic, film-grain look.',
+    parker:   'Parker: progressive blue-noise mask built with a farthest-point rank map — ordered dither without obvious periodicity. Named for Matt Parker.',
+    gol:      'Game of Life: self-organising, dynamic dither mask. Very stylish / experimental. The Update-Rate slider controls how fast it evolves.',
+  };
+  function setHint() { hintEl.textContent = METHOD_HINTS[methodSel.value] || ''; }
+
+  // Show only the setting rows that apply to the current method
+  function updateSettingsVisibility() {
+    const m = methodSel.value;
+    document.querySelectorAll('[data-method]').forEach(el => {
+      const methods = el.dataset.method.split(' ');
+      el.style.display = methods.includes(m) ? '' : 'none';
+    });
+  }
+
+  // ── Math helpers ──────────────────────────────────────────────────────────
+  const clamp01  = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const clampInt = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+
+  function buildGammaLUT(gamma) {
+    if (gamma === cachedGamma) return gammaLUT;
+    cachedGamma = gamma;
+    for (let i = 0; i < 256; i++) gammaLUT[i] = Math.pow(i / 255, gamma);
+    return gammaLUT;
+  }
+
+  // Compute a global threshold offset so that approximately half the pixels
+  // quantize to white for binary (levels==2) ordered/mask methods.
+  // Uses a simple binary search over offset in [-1,1].
+  function computeAutoThreshold(lum, w, h, tile, tileN, maxQ) {
+    const NP = w * h;
+    let lo = -0.5, hi = 0.5, best = 0;
+    for (let iter = 0; iter < 12; iter++) {
+      const mid = (lo + hi) / 2;
+      let ones = 0;
+      let idx = 0;
+      for (let y = 0; y < h; y++) {
+        const ty = (y) % tileN;
+        for (let x = 0; x < w; x++, idx++) {
+          const thr = tile[ty * tileN + (x % tileN)] + mid;
+          const q = Math.floor(clamp01(lum[idx]) * maxQ + thr);
+          if (q >= 1) ones++;
+        }
+      }
+      if (ones > NP / 2) hi = mid; else lo = mid;
+      best = mid;
+    }
+    return best;
+  }
+
+  // ── Bayer matrix (recursive, power-of-two sizes) ─────────────────────────
+  function genBayer(n) {
+    if (n === 2) return new Int32Array([0, 2, 3, 1]);
+    const half = n >> 1;
+    const prev = genBayer(half);
+    const m    = new Int32Array(n * n);
+    for (let y = 0; y < half; y++) for (let x = 0; x < half; x++) {
+      const v = prev[y * half + x];
+      m[y * n + x]                 = 4 * v;
+      m[y * n + x + half]          = 4 * v + 2;
+      m[(y + half) * n + x]        = 4 * v + 3;
+      m[(y + half) * n + x + half] = 4 * v + 1;
+    }
+    return m;
+  }
+  function makeBayerMask(n) {
+    const raw = genBayer(n);
+    const N   = n * n;
+    const f   = new Float32Array(N);
+    for (let i = 0; i < N; i++) f[i] = (raw[i] + 0.5) / N;
+    return f;
+  }
+
+  // ── Blue-noise tile: high-pass white noise, rank-normalised ───────────────
+  function makeBlueNoiseTile(n, seed = 12345) {
+    let s = seed >>> 0;
+    const rand = () => (s = (1664525 * s + 1013904223) >>> 0, s / 0x100000000);
+    const N = n * n;
+    const a = new Float32Array(N);
+    for (let i = 0; i < N; i++) a[i] = rand();
+
+    // 3×3 box blur (torus-wrapped) then subtract → high-pass
+    const blur = new Float32Array(N);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
+        sum += a[((y + dy + n) % n) * n + ((x + dx + n) % n)];
+      blur[y * n + x] = sum / 9;
+    }
+    let mn = 1e9, mx = -1e9;
+    const hp = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const v = a[i] - blur[i]; hp[i] = v;
+      if (v < mn) mn = v; if (v > mx) mx = v;
+    }
+    const denom = (mx - mn) || 1;
+    const norm  = new Float32Array(N);
+    for (let i = 0; i < N; i++) norm[i] = (hp[i] - mn) / denom;
+
+    const idx = Array.from({ length: N }, (_, i) => i);
+    idx.sort((a, b) => norm[a] - norm[b]);
+    const result = new Float32Array(N);
+    for (let r = 0; r < N; r++) result[idx[r]] = (r + 0.5) / N;
+    return result;
+  }
+
+  // ── Parker-style progressive blue-noise rank mask (farthest-point, torus) ─
+  // Inlined worker source so the demo is a single file. Worker is used when
+  // available to avoid main-thread blocking; falls back to a chunked generator
+  // or the faster blue-noise tile for very large masks.
+  let _parkerWorker = null;
+  let _parkerWorkerURL = null;
+  const PARKER_WORKER_SRC = `self.onmessage = function(e) {
+  const msg = e.data;
+  if (!msg || msg.cmd !== 'build') return;
+  const id = msg.id;
+  const n = msg.n | 0;
+  const seed = msg.seed >>> 0;
+
+  if (n > 128) {
+    self.postMessage({ type: 'fallback', id });
+    return;
+  }
+
+  // xorshift32 RNG and small jitter to break symmetries
+  let s = (seed | 1) >>> 0;
+  function rand() { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s >>>= 0; s ^= s << 5; s >>>= 0; return (s >>> 0) / 4294967295; }
+  function randInt(m) { return Math.floor(rand() * m); }
+
+  const N = n * n;
+  const selected = new Uint8Array(N);
+  const dist = new Float64Array(N);
+  for (let i = 0; i < N; i++) dist[i] = 1e18;
+  const rank = new Float32Array(N);
+
+  const xs = new Int16Array(N);
+  const ys = new Int16Array(N);
+  for (let i = 0; i < N; i++) { xs[i] = i % n; ys[i] = (i / n) | 0; }
+  function torusDist2(i, j) {
+    let dx = Math.abs(xs[i] - xs[j]); if (dx > n/2) dx = n - dx;
+    let dy = Math.abs(ys[i] - ys[j]); if (dy > n/2) dy = n - dy;
+    return dx*dx + dy*dy;
+  }
+
+  // Start from center for better symmetry
+  let cur = Math.floor(N / 2);
+  selected[cur] = 1; dist[cur] = 0; rank[cur] = 0;
+  for (let i = 0; i < N; i++) {
+    const d = torusDist2(i, cur);
+    if (d < dist[i]) dist[i] = d;
+  }
+
+  let k = 1;
+  const PROGRESS_STEP = Math.max(1, (N / 100) | 0);
+  while (k < N) {
+    let best = -1, bestD = -1;
+    for (let i = 0; i < N; i++) {
+      if (selected[i]) continue;
+      // tiny jitter to reduce perfect symmetry
+      const d = dist[i] + (rand() - 0.5) * 1e-8;
+      if (d > bestD) { bestD = d; best = i; }
+    }
+    if (best === -1) break;
+    selected[best] = 1;
+    rank[best] = (k) / (N - 1);
+    for (let i = 0; i < N; i++) {
+      if (selected[i]) continue;
+      const d = torusDist2(i, best);
+      if (d < dist[i]) dist[i] = d;
+    }
+    k++;
+    if ((k % PROGRESS_STEP) === 0) {
+      self.postMessage({ type: 'progress', id, p: k / N });
+    }
+  }
+
+  self.postMessage({ type: 'result', id, buffer: rank.buffer }, [rank.buffer]);
+};`;
+
+  function initParkerWorker() {
+    if (_parkerWorker) return;
+    try {
+      const blob = new Blob([PARKER_WORKER_SRC], { type: 'application/javascript' });
+      _parkerWorkerURL = URL.createObjectURL(blob);
+      _parkerWorker = new Worker(_parkerWorkerURL);
+    } catch (e) {
+      _parkerWorker = null;
+    }
+  }
+
+  // Ensure worker is terminated and blob URL revoked on unload
+  window.addEventListener('unload', () => {
+    try { if (_parkerWorker) _parkerWorker.terminate(); } catch (e) {}
+    try { if (_parkerWorkerURL) URL.revokeObjectURL(_parkerWorkerURL); } catch (e) {}
+  });
+
+  function makeProgressiveBlueNoiseRank(n, seed = 7, onProgress) {
+    if (n > 128) return Promise.resolve(makeBlueNoiseTile(n, seed));
+
+    initParkerWorker();
+    if (_parkerWorker) {
+      return new Promise((resolve) => {
+        const id = Math.random().toString(36).slice(2);
+        function handler(e) {
+          const msg = e.data;
+          if (msg.id !== id) return;
+          if (msg.type === 'progress') {
+            if (typeof onProgress === 'function') onProgress(msg.p);
+          } else if (msg.type === 'fallback') {
+            _parkerWorker.removeEventListener('message', handler);
+            resolve(makeBlueNoiseTile(n, seed));
+          } else if (msg.type === 'result') {
+            _parkerWorker.removeEventListener('message', handler);
+            const rank = new Float32Array(msg.buffer);
+            resolve(rank);
+          }
+        }
+        _parkerWorker.addEventListener('message', handler);
+        _parkerWorker.postMessage({ cmd: 'build', id, n, seed });
+      });
+    }
+
+    if (n > 64) return Promise.resolve(makeBlueNoiseTile(n, seed));
+    return new Promise((resolve) => {
+      // xorshift RNG and small jitter to break symmetry
+      let s = (seed | 1) >>> 0;
+      function rand() { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s >>>= 0; s ^= s << 5; s >>>= 0; return (s >>> 0) / 4294967295; }
+      function randInt(m) { return Math.floor(rand() * m); }
+      const N = n * n;
+      const selected = new Uint8Array(N);
+      const dist = new Float32Array(N);
+      dist.fill(1e9);
+      const rank = new Float32Array(N);
+      const xs = new Int16Array(N);
+      const ys = new Int16Array(N);
+      for (let i = 0; i < N; i++) { xs[i] = i % n; ys[i] = (i / n) | 0; }
+      function torusDist2(i, j) {
+        let dx = Math.abs(xs[i] - xs[j]); if (dx > n/2) dx = n - dx;
+        let dy = Math.abs(ys[i] - ys[j]); if (dy > n/2) dy = n - dy;
+        return dx*dx + dy*dy;
+      }
+      // start from center
+      let cur = Math.floor(N / 2);
+      selected[cur] = 1; dist[cur] = 0; rank[cur] = 0;
+      for (let i = 0; i < N; i++) dist[i] = Math.min(dist[i], torusDist2(i, cur));
+      let k = 1; const BATCH = 8;
+      function stepChunk() {
+        const limit = Math.min(N, k + BATCH);
+        for (; k < limit; k++) {
+          let best = -1, bestD = -1;
+          for (let i = 0; i < N; i++) {
+            if (selected[i]) continue; const d = dist[i] + (rand() - 0.5) * 1e-8; if (d > bestD) { bestD = d; best = i; }
+          }
+          if (best === -1) break;
+          selected[best] = 1; rank[best] = (k) / (N - 1);
+          for (let i = 0; i < N; i++) {
+            if (selected[i]) continue; const d = torusDist2(i, best); if (d < dist[i]) dist[i] = d;
+          }
+        }
+        if (typeof onProgress === 'function') onProgress(k / N);
+        if (k < N) setTimeout(stepChunk, 0); else resolve(rank);
+      }
+      stepChunk();
+    });
+  }
+
+
+  // ── Game of Life ──────────────────────────────────────────────────────────
+  function makeGoL(n, seed = 1337) {
+    let s = seed >>> 0;
+    const rand = () => (s = (1664525 * s + 1013904223) >>> 0, s / 0x100000000);
+    const N = n * n;
+    const grid = new Uint8Array(N);
+    const next = new Uint8Array(N);
+    const thr  = new Float32Array(N);
+    for (let i = 0; i < N; i++) grid[i] = rand() < 0.35 ? 1 : 0;
+    const idx = (x, y) => ((y + n) % n) * n + ((x + n) % n);
+    function step() {
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        const nb = grid[idx(x-1,y-1)] + grid[idx(x,y-1)] + grid[idx(x+1,y-1)]
+                 + grid[idx(x-1,y  )]                     + grid[idx(x+1,y  )]
+                 + grid[idx(x-1,y+1)] + grid[idx(x,y+1)] + grid[idx(x+1,y+1)];
+        const i = y * n + x, alive = grid[i] === 1;
+        next[i] = ((alive && (nb === 2 || nb === 3)) || (!alive && nb === 3)) ? 1 : 0;
+        thr[i]  = clamp01((nb + (alive ? 0.5 : 0)) / 8.5);
+      }
+      grid.set(next);
+    }
+    return { n, grid, next, thresholds: thr, step, frameCounter: 0 };
+  }
+
+  // ── Mask rebuild ──────────────────────────────────────────────────────────
+  function rebuildMasks() {
+    const mSize = parseInt(maskSizeEl.value, 10);
+    maskVal.textContent = String(mSize);
+    const pow2 = [16, 32, 64, 128].includes(mSize) ? mSize : 64;
+
+    bayer    = makeBayerMask(pow2);
+    blueTile = makeBlueNoiseTile(pow2, 12345);
+
+    // Parker is expensive for large masks; run async and show progress
+    statusEl.textContent = 'building Parker mask…';
+    makeProgressiveBlueNoiseRank(pow2, 7, (p) => {
+      statusEl.textContent = `building Parker mask… ${Math.round(p*100)}%`;
+    }).then((rank) => {
+      parkerTile = rank;
+      const golN = parseInt(golSizeEl.value, 10);
+      golSizeVal.textContent = String(golN);
+      gol = makeGoL(golN, 1337);
+      statusEl.textContent = running ? 'running' : 'idle';
+    });
+  }
+
+  // ── Dither core ───────────────────────────────────────────────────────────
+  function ditherFrame(imgData, w, h) {
+    const method   = methodSel.value;
+    const levels   = parseInt(levelsEl.value, 10);
+    const inv      = invertEl.checked;
+    const serp     = serpEl.checked;
+    const animBlue = animateBlueEl.checked;
+    const lut      = buildGammaLUT(parseFloat(gammaEl.value));
+    const src      = imgData.data;
+    const NP       = w * h;
+    const maxQ     = levels - 1;
+
+    // Reuse typed-array buffers; reallocate only on size change
+    if (!lumBuf || lumBuf.length !== NP) {
+      lumBuf     = new Float32Array(NP);
+      outDataBuf = new Uint8ClampedArray(NP * 4);
+      outImgData = new ImageData(outDataBuf, w, h);
+    }
+
+    // Gamma-corrected Rec.709 luminance via integer LUT (no Math.pow per pixel)
+    for (let i = 0, p = 0; i < NP; i++, p += 4) {
+      const lin = (0.2126 * src[p] + 0.7152 * src[p + 1] + 0.0722 * src[p + 2] + 0.5) | 0;
+      lumBuf[i] = lut[clampInt(lin, 0, 255)];
+    }
+
+    // ── Error-diffusion methods ───────────────────────────────────────────
+    // Each kernel: array of [dxBase, dy, numerator, denominator]
+    // dxBase is relative to the scan direction (flipped automatically for serpentine).
+    const ED_KERNELS = {
+      floyd:    [[1,0,7,16],[-1,1,3,16],[0,1,5,16],[1,1,1,16]],
+      atkinson: [[1,0,1,8],[2,0,1,8],[-1,1,1,8],[0,1,1,8],[1,1,1,8],[0,2,1,8]],
+      stucki:   [[1,0,8,42],[2,0,4,42],[-2,1,2,42],[-1,1,4,42],[0,1,8,42],[1,1,4,42],[2,1,2,42],
+                 [-2,2,1,42],[-1,2,2,42],[0,2,4,42],[1,2,2,42],[2,2,1,42]],
+      jjn:      [[1,0,7,48],[2,0,5,48],[-2,1,3,48],[-1,1,5,48],[0,1,7,48],[1,1,5,48],[2,1,3,48],
+                 [-2,2,1,48],[-1,2,3,48],[0,2,5,48],[1,2,3,48],[2,2,1,48]],
+      sierra:   [[1,0,5,32],[2,0,3,32],[-2,1,2,32],[-1,1,4,32],[0,1,5,32],[1,1,4,32],[2,1,2,32],
+                 [-1,2,2,32],[0,2,3,32],[1,2,2,32]],
+    };
+    if (ED_KERNELS[method]) {
+      const kernel   = ED_KERNELS[method];
+      const quantize = v => Math.round(clamp01(v) * maxQ) / maxQ;
+      for (let y = 0; y < h; y++) {
+        const dir = serp && (y & 1) ? -1 : 1;
+        for (let x = dir === 1 ? 0 : w - 1; x !== (dir === 1 ? w : -1); x += dir) {
+          const i    = y * w + x;
+          const oldv = lumBuf[i];
+          const newv = quantize(oldv);
+          const err  = oldv - newv;
+          lumBuf[i]  = newv;
+          for (const [dxBase, dy, num, den] of kernel) {
+            const nx = x + (dir === 1 ? dxBase : -dxBase);
+            const ny = y + dy;
+            if (nx >= 0 && nx < w && ny < h)
+              lumBuf[ny * w + nx] += err * num / den;
+          }
+        }
+      }
+      for (let i = 0, p = 0; i < NP; i++, p += 4) {
+        let v = clamp01(lumBuf[i]); if (inv) v = 1 - v;
+        const c = (v * 255) | 0;
+        outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+      }
+      return outImgData;
+    }
+
+    // Ordered / mask-based methods
+    let tile, tileN;
+    if      (method === 'bayer')  { tile = bayer;             tileN = Math.sqrt(tile.length) | 0; }
+    else if (method === 'blue')   { tile = blueTile;          tileN = Math.sqrt(tile.length) | 0; }
+    else if (method === 'parker') { tile = parkerTile || blueTile; tileN = Math.sqrt(tile.length) | 0; }
+    else {   // gol
+      tile  = gol.thresholds; tileN = gol.n;
+      const upd = parseInt(golUpdEl.value, 10);
+      golUpdVal.textContent = String(upd);
+      if ((++gol.frameCounter) % upd === 0) gol.step();
+    }
+
+    const t  = performance.now() * 0.001;
+    const sx = (animBlue && method === 'blue') ? ((t * 37) | 0) : 0;
+    const sy = (animBlue && method === 'blue') ? ((t * 29) | 0) : 0;
+
+    // Global threshold offset: manual slider is centered at 0.5 -> offset = val-0.5
+    let globalOffset = (typeof thresholdEl !== 'undefined') ? (parseFloat(thresholdEl.value) - 0.5) : 0;
+    if (typeof autoThrEl !== 'undefined' && autoThrEl.checked && (maxQ === 1) && tile && tileN) {
+      globalOffset = computeAutoThreshold(lumBuf, w, h, tile, tileN, maxQ);
+    }
+
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      const ty  = (y + sy) % tileN;
+      for (let x = 0; x < w; x++) {
+        let thr  = tile[ty * tileN + ((x + sx) % tileN)] + globalOffset;
+        thr = clamp01(thr);
+        const q    = clampInt((clamp01(lumBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
+        let outv   = q / maxQ; if (inv) outv = 1 - outv;
+        const c    = (outv * 255) | 0;
+        const p    = (row + x) * 4;
+        outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+      }
+    }
+    return outImgData;
+  }
+
+  // ── Canvas sizing ─────────────────────────────────────────────────────────
+  function resizeCanvases(sw, sh) {
+    const scale = parseFloat(scaleEl.value);
+    const vw = sw || (srcMode === 'image' ? srcImg.naturalWidth  : video.videoWidth)  || 0;
+    const vh = sh || (srcMode === 'image' ? srcImg.naturalHeight : video.videoHeight) || 0;
+    if (!vw || !vh) return;
+    const w = Math.max(1, Math.round(vw * scale));
+    const h = Math.max(1, Math.round(vh * scale));
+    off.width  = w; off.height  = h;
+    out.width  = w; out.height  = h;
+    lumBuf = null;  // force buffer realloc on next frame
+    dimsEl.textContent = `${w}×${h}  (scale ${scale.toFixed(2)}×)`;
+  }
+
+  // ── Render loop ───────────────────────────────────────────────────────────
+  function loop() {
+    if (!running) return;
+    offCtx.drawImage(srcMode === 'image' ? srcImg : video, 0, 0, off.width, off.height);
+    outCtx.putImageData(
+      ditherFrame(offCtx.getImageData(0, 0, off.width, off.height), off.width, off.height),
+      0, 0
+    );
+    frames++;
+    const now = performance.now();
+    if (now - lastT >= 500) {
+      fpsEl.textContent = (frames * 1000 / (now - lastT)).toFixed(1);
+      frames = 0; lastT = now;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  // ── Screen Capture ────────────────────────────────────────────────────────
+  async function startCapture() {
+    try {
+      statusEl.textContent = 'requesting permission…';
+      badgeEl.textContent  = 'permission…';
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 60 } }, audio: false });
+      video.srcObject = stream;
+      await video.play();
+      await new Promise(res => { if (video.videoWidth) res(); else video.onloadedmetadata = res; });
+      srcMode = 'screen';
+      resizeCanvases(); rebuildMasks();
+      running = true;
+      startBtn.disabled = true; stopBtn.disabled = false; saveBtn.disabled = false;
+      statusEl.textContent = 'running'; badgeEl.textContent = 'stream active';
+      stream.getVideoTracks()[0].addEventListener('ended', stopCapture);
+      rafId = requestAnimationFrame(loop);
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'error'; badgeEl.textContent = 'no stream';
+      alert('Screen capture failed.\nTip: Open this page via localhost or https.\n\n' + (e?.message || e));
+    }
+  }
+
+  function stopCapture() {
+    running = false;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; }
+    video.srcObject = null;
+    startBtn.disabled = false; stopBtn.disabled = true;
+    statusEl.textContent = 'stopped'; badgeEl.textContent = 'no stream';
+  }
+
+  // ── File loaders ──────────────────────────────────────────────────────────
+  function stopCurrent() {
+    running = false;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; }
+    video.srcObject = null;
+  }
+
+  function loadImageFile(file) {
+    stopCurrent();
+    const url = URL.createObjectURL(file);
+    srcImg.onload = () => {
+      URL.revokeObjectURL(url);
+      srcMode = 'image';
+      resizeCanvases(srcImg.naturalWidth, srcImg.naturalHeight);
+      rebuildMasks();
+      running = true; saveBtn.disabled = false;
+      statusEl.textContent = 'image loaded'; badgeEl.textContent = file.name;
+      rafId = requestAnimationFrame(loop);
+    };
+    srcImg.src = url;
+  }
+
+  function loadVideoFile(file) {
+    stopCurrent();
+    video.src = URL.createObjectURL(file);
+    video.onloadedmetadata = () => {
+      srcMode = 'video';
+      resizeCanvases(video.videoWidth, video.videoHeight);
+      rebuildMasks();
+      running = true; saveBtn.disabled = false;
+      statusEl.textContent = 'video playing'; badgeEl.textContent = file.name;
+      rafId = requestAnimationFrame(loop);
+    };
+    video.play().catch(() => {});
+  }
+
+  // ── Save frame ────────────────────────────────────────────────────────────
+  function saveFrame() {
+    const a = document.createElement('a');
+    a.download = `dither-${methodSel.value}-${Date.now()}.png`;
+    a.href = out.toDataURL('image/png');
+    a.click();
+  }
+
+  // ── UI bindings ───────────────────────────────────────────────────────────
+  function syncLabels() {
+    levelsVal.textContent  = levelsEl.value;
+    scaleVal.textContent   = `${parseFloat(scaleEl.value).toFixed(2)}×`;
+    gammaVal.textContent   = parseFloat(gammaEl.value).toFixed(2);
+    thresholdVal.textContent = parseFloat(thresholdEl.value).toFixed(2);
+    golUpdVal.textContent  = golUpdEl.value;
+    golSizeVal.textContent = golSizeEl.value;
+    maskVal.textContent    = maskSizeEl.value;
+    setHint();
+  }
+
+  startBtn.addEventListener('click', startCapture);
+  stopBtn.addEventListener('click', () => { stopCapture(); saveBtn.disabled = true; });
+
+  uploadImgBtn.addEventListener('click', () => uploadImgFile.click());
+  uploadImgFile.addEventListener('change', () => { if (uploadImgFile.files[0]) loadImageFile(uploadImgFile.files[0]); });
+
+  uploadVidBtn.addEventListener('click', () => uploadVidFile.click());
+  uploadVidFile.addEventListener('change', () => { if (uploadVidFile.files[0]) loadVideoFile(uploadVidFile.files[0]); });
+
+  saveBtn.addEventListener('click', saveFrame);
+
+  if (typeof autoThrEl !== 'undefined') autoThrEl.addEventListener('change', () => { syncLabels(); });
+
+  methodSel.addEventListener('change', () => { syncLabels(); updateSettingsVisibility(); });
+  [levelsEl, scaleEl, gammaEl, thresholdEl, golUpdEl, golSizeEl, maskSizeEl].forEach(el =>
+    el.addEventListener('input', () => {
+      syncLabels();
+      if (el === scaleEl && running) resizeCanvases();
+      if ((el === golSizeEl || el === maskSizeEl) && running) rebuildMasks();
+    })
+  );
+  window.addEventListener('resize', () => { if (running) resizeCanvases(); });
+
+  // Init
+  syncLabels();
+  updateSettingsVisibility();
+  rebuildMasks();
+})();
+</script>
+</body>
+</html>
