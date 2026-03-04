@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Live Dither Lab</title>
+  <meta name="theme-color" content="#0b0d10" />
   <style>
     :root { color-scheme: dark; }
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0d10; color:#e8eef6; }
@@ -44,12 +45,16 @@
       .wrap { grid-template-columns: 1fr; }
       header .attribution { margin-left: 0; }
     }
+    @media (max-width: 600px) {
+      button { padding: 11px 12px; font-size: 14px; }
+      .panel { padding: 10px; }
+    }
   </style>
 </head>
 <body>
 <header>
   <h1>Live Dither Lab</h1>
-  <div class="sub">Screen Capture / Image &amp; Video Upload → Canvas → Dither</div>
+  <div class="sub" id="headerSub">Screen Capture / Image &amp; Video Upload → Canvas → Dither</div>
   <div class="attribution">
     Built for <a href="https://www.youtube.com/watch?v=kT4p1GXq4HY" target="_blank" rel="noopener">Matt Parker's dithering video ↗</a>
   </div>
@@ -61,6 +66,8 @@
 
     <div class="row">
       <button id="startBtn" class="accent">Start Screen Capture</button>
+      <button id="cameraBtn" class="accent" style="display:none" aria-label="Start camera">📷 Start Camera</button>
+      <button id="switchCamBtn" style="display:none" disabled aria-label="Flip camera">🔄 Flip Camera</button>
       <button id="stopBtn" disabled>Stop</button>
     </div>
 
@@ -183,6 +190,8 @@
   // ── DOM refs ──────────────────────────────────────────────────────────────
   const startBtn      = document.getElementById('startBtn');
   const stopBtn       = document.getElementById('stopBtn');
+  const cameraBtn     = document.getElementById('cameraBtn');
+  const switchCamBtn  = document.getElementById('switchCamBtn');
   const uploadImgBtn  = document.getElementById('uploadImgBtn');
   const uploadImgFile = document.getElementById('uploadImgFile');
   const uploadVidBtn  = document.getElementById('uploadVidBtn');
@@ -220,12 +229,13 @@
   const offCtx        = off.getContext('2d', { willReadFrequently: true });
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let stream  = null;
-  let rafId   = null;
-  let running = false;
-  let srcMode = 'screen';   // 'screen' | 'image' | 'video'
-  let lastT   = performance.now();
-  let frames  = 0;
+  let stream       = null;
+  let rafId        = null;
+  let running      = false;
+  let srcMode      = 'screen';   // 'screen' | 'camera' | 'image' | 'video'
+  let cameraFacing = 'environment'; // 'environment' = rear, 'user' = front
+  let lastT        = performance.now();
+  let frames       = 0;
 
   // Per-frame reusable buffers (avoid GC pressure at 30 fps)
   let lumBuf     = null;   // Float32Array  – gamma-corrected luminance
@@ -241,6 +251,12 @@
   let blueTile   = null;
   let parkerTile = null;
   let gol        = null;   // { n, grid, next, thresholds, step, frameCounter }
+
+  // ── Mobile detection ──────────────────────────────────────────────────────
+  // Detect smartphones/tablets: UA check + iPads on iOS 13+ (reports as Macintosh
+  // but exposes touch points).
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 
   // ── Method hints ──────────────────────────────────────────────────────────
   const METHOD_HINTS = {
@@ -725,8 +741,44 @@
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; }
     video.srcObject = null;
-    startBtn.disabled = false; stopBtn.disabled = true;
+    startBtn.disabled = false; cameraBtn.disabled = false; stopBtn.disabled = true;
+    switchCamBtn.disabled = true;
     statusEl.textContent = 'stopped'; badgeEl.textContent = 'no stream';
+  }
+
+  // ── Camera (mobile) ───────────────────────────────────────────────────────
+  async function startCamera() {
+    try {
+      stopCurrent();
+      statusEl.textContent = 'requesting camera…';
+      badgeEl.textContent  = 'permission…';
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: cameraFacing }, frameRate: { ideal: 30 } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      await new Promise(res => { if (video.videoWidth) res(); else video.onloadedmetadata = res; });
+      srcMode = 'camera';
+      resizeCanvases(); rebuildMasks();
+      running = true;
+      cameraBtn.disabled = true; stopBtn.disabled = false; saveBtn.disabled = false;
+      switchCamBtn.disabled = false;
+      statusEl.textContent = 'running';
+      badgeEl.textContent = cameraFacing === 'environment' ? '📷 rear camera' : '🤳 front camera';
+      stream.getVideoTracks()[0].addEventListener('ended', stopCapture);
+      rafId = requestAnimationFrame(loop);
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'error'; badgeEl.textContent = 'no stream';
+      cameraBtn.disabled = false;
+      alert('Camera access failed.\nTip: Make sure camera permission is granted.\n\n' + (e?.message || e));
+    }
+  }
+
+  async function switchCamera() {
+    cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    await startCamera();
   }
 
   // ── File loaders ──────────────────────────────────────────────────────────
@@ -735,6 +787,7 @@
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; }
     video.srcObject = null;
+    switchCamBtn.disabled = true;
   }
 
   function loadImageFile(file) {
@@ -789,6 +842,9 @@
   startBtn.addEventListener('click', startCapture);
   stopBtn.addEventListener('click', () => { stopCapture(); saveBtn.disabled = true; });
 
+  cameraBtn.addEventListener('click', startCamera);
+  switchCamBtn.addEventListener('click', switchCamera);
+
   uploadImgBtn.addEventListener('click', () => uploadImgFile.click());
   uploadImgFile.addEventListener('change', () => { if (uploadImgFile.files[0]) loadImageFile(uploadImgFile.files[0]); });
 
@@ -813,6 +869,14 @@
   syncLabels();
   updateSettingsVisibility();
   rebuildMasks();
+
+  // Mobile: replace screen-capture button with camera button
+  if (isMobile) {
+    startBtn.style.display = 'none';
+    cameraBtn.style.display = '';
+    switchCamBtn.style.display = '';
+    document.getElementById('headerSub').textContent = 'Camera / Image & Video Upload → Canvas → Dither';
+  }
 })();
 </script>
 </body>
