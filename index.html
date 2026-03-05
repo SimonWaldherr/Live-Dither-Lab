@@ -85,7 +85,12 @@
       <label>
         Method
         <select id="methodSel">
-          <option value="bayer">Bayer (ordered)</option>
+          <option value="none">None (no dithering)</option>
+          <option value="bayer2">Bayer 2×2</option>
+          <option value="bayer4">Bayer 4×4</option>
+          <option value="bayer8">Bayer 8×8</option>
+          <option value="bayer16">Bayer 16×16</option>
+          <option value="bayer">Bayer (variable size)</option>
           <option value="floyd">Floyd–Steinberg (error diffusion)</option>
           <option value="atkinson">Atkinson (error diffusion)</option>
           <option value="stucki">Stucki (error diffusion)</option>
@@ -121,6 +126,20 @@
 
     <div class="row">
       <label style="flex:1">
+        Brightness: <span id="brightnessVal" class="badge">0.00</span>
+        <input id="brightness" type="range" min="-0.5" max="0.5" step="0.01" value="0" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
+        Contrast: <span id="contrastVal" class="badge">1.00</span>
+        <input id="contrast" type="range" min="0.25" max="4" step="0.05" value="1" style="flex:1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:1">
         Threshold: <span id="thresholdVal" class="badge">0.50</span>
         <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.5" style="flex:1" />
       </label>
@@ -131,6 +150,21 @@
 
     <div class="row">
       <label><input id="invert" type="checkbox" /> Invert</label>
+    </div>
+    <div class="row">
+      <label><input id="colorMode" type="checkbox" /> Color output</label>
+    </div>
+    <div class="row" id="grayChannelRow">
+      <label>
+        Grayscale source
+        <select id="grayChannel">
+          <option value="luma">Luma (Rec.709)</option>
+          <option value="avg">Average (RGB)</option>
+          <option value="r">Red channel</option>
+          <option value="g">Green channel</option>
+          <option value="b">Blue channel</option>
+        </select>
+      </label>
     </div>
     <div class="row" data-method="floyd atkinson stucki jjn sierra">
       <label><input id="serp" type="checkbox" checked /> Serpentine scan</label>
@@ -215,6 +249,13 @@
   const golUpdVal     = document.getElementById('golUpdVal');
   const maskSizeEl    = document.getElementById('maskSize');
   const maskVal       = document.getElementById('maskVal');
+  const colorModeEl   = document.getElementById('colorMode');
+  const grayChannelEl = document.getElementById('grayChannel');
+  const grayChannelRow = document.getElementById('grayChannelRow');
+  const brightnessEl  = document.getElementById('brightness');
+  const brightnessVal = document.getElementById('brightnessVal');
+  const contrastEl    = document.getElementById('contrast');
+  const contrastVal   = document.getElementById('contrastVal');
   const saveBtn       = document.getElementById('saveBtn');
   const fpsEl         = document.getElementById('fps');
   const dimsEl        = document.getElementById('dims');
@@ -241,6 +282,9 @@
   let lumBuf     = null;   // Float32Array  – gamma-corrected luminance
   let outDataBuf = null;   // Uint8ClampedArray – output RGBA
   let outImgData = null;   // ImageData wrapping outDataBuf
+  let rBuf       = null;   // Float32Array – red channel (color mode)
+  let gBuf       = null;   // Float32Array – green channel (color mode)
+  let bBuf       = null;   // Float32Array – blue channel (color mode)
 
   // Gamma LUT: 256 floats, recomputed only when gamma slider changes
   let cachedGamma = -1;
@@ -260,7 +304,12 @@
 
   // ── Method hints ──────────────────────────────────────────────────────────
   const METHOD_HINTS = {
-    bayer:    'Bayer: ordered dither with a periodic threshold matrix. Fast; may show a visible grid pattern.',
+    none:    'None: pixels are simply rounded to the nearest level with no dithering applied. Useful as a baseline to compare against dithered output.',
+    bayer2:  'Bayer 2×2: the smallest ordered dither matrix (4 thresholds). Very coarse 2-pixel grid pattern; fastest ordered method.',
+    bayer4:  'Bayer 4×4: 16-threshold ordered dither. Classic "newspaper" crosshatch look at low resolutions.',
+    bayer8:  'Bayer 8×8: 64-threshold ordered dither. Good balance between pattern visibility and tonal range.',
+    bayer16: 'Bayer 16×16: 256-threshold ordered dither. Fine grid; nearly invisible at normal viewing distance.',
+    bayer:   'Bayer (variable size): ordered dither with a periodic threshold matrix. Use the Mask Size slider to control the matrix size. Fast; may show a visible grid pattern.',
     floyd:    'Floyd–Steinberg: error-diffusion. Spreads quantisation error to 4 neighbours (7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right). Serpentine mode reduces directional bias.',
     atkinson: 'Atkinson: error-diffusion that propagates only ¾ of the error (6×1/8 spread). Gives high-contrast, punchy results — the classic Mac/HyperCard look.',
     stucki:   'Stucki: wide 5×3 error-diffusion kernel with gentler fall-off than JJN. Excellent gradient smoothness with minimal banding.',
@@ -279,6 +328,7 @@
       const methods = el.dataset.method.split(' ');
       el.style.display = methods.includes(m) ? '' : 'none';
     });
+    grayChannelRow.style.display = colorModeEl.checked ? 'none' : '';
   }
 
   // ── Math helpers ──────────────────────────────────────────────────────────
@@ -338,6 +388,12 @@
     for (let i = 0; i < N; i++) f[i] = (raw[i] + 0.5) / N;
     return f;
   }
+
+  // Pre-computed fixed-size Bayer masks (used by the dedicated bayer2/4/8/16 methods)
+  const BAYER2  = makeBayerMask(2);
+  const BAYER4  = makeBayerMask(4);
+  const BAYER8  = makeBayerMask(8);
+  const BAYER16 = makeBayerMask(16);
 
   // ── Blue-noise tile: high-pass white noise, rank-normalised ───────────────
   function makeBlueNoiseTile(n, seed = 12345) {
@@ -581,27 +637,93 @@
 
   // ── Dither core ───────────────────────────────────────────────────────────
   function ditherFrame(imgData, w, h) {
-    const method   = methodSel.value;
-    const levels   = parseInt(levelsEl.value, 10);
-    const inv      = invertEl.checked;
-    const serp     = serpEl.checked;
-    const animBlue = animateBlueEl.checked;
-    const lut      = buildGammaLUT(parseFloat(gammaEl.value));
-    const src      = imgData.data;
-    const NP       = w * h;
-    const maxQ     = levels - 1;
+    const method     = methodSel.value;
+    const levels     = parseInt(levelsEl.value, 10);
+    const inv        = invertEl.checked;
+    const serp       = serpEl.checked;
+    const animBlue   = animateBlueEl.checked;
+    const lut        = buildGammaLUT(parseFloat(gammaEl.value));
+    const brightness = parseFloat(brightnessEl.value);
+    const contrast   = parseFloat(contrastEl.value);
+    const colorOut   = colorModeEl.checked;
+    const grayCh     = grayChannelEl.value;
+    const src        = imgData.data;
+    const NP         = w * h;
+    const maxQ       = levels - 1;
 
     // Reuse typed-array buffers; reallocate only on size change
     if (!lumBuf || lumBuf.length !== NP) {
       lumBuf     = new Float32Array(NP);
       outDataBuf = new Uint8ClampedArray(NP * 4);
       outImgData = new ImageData(outDataBuf, w, h);
+      rBuf = null;
+      gBuf = null;
+      bBuf = null;  // force realloc for color buffers
+    }
+    if (colorOut && (!rBuf || rBuf.length !== NP)) {
+      rBuf = new Float32Array(NP);
+      gBuf = new Float32Array(NP);
+      bBuf = new Float32Array(NP);
     }
 
-    // Gamma-corrected Rec.709 luminance via integer LUT (no Math.pow per pixel)
-    for (let i = 0, p = 0; i < NP; i++, p += 4) {
-      const lin = (0.2126 * src[p] + 0.7152 * src[p + 1] + 0.0722 * src[p + 2] + 0.5) | 0;
-      lumBuf[i] = lut[clampInt(lin, 0, 255)];
+    // Fill input buffers with gamma-corrected values
+    if (colorOut) {
+      for (let i = 0, p = 0; i < NP; i++, p += 4) {
+        rBuf[i] = lut[src[p]];
+        gBuf[i] = lut[src[p + 1]];
+        bBuf[i] = lut[src[p + 2]];
+      }
+    } else {
+      for (let i = 0, p = 0; i < NP; i++, p += 4) {
+        switch (grayCh) {
+          case 'r':   lumBuf[i] = lut[src[p]]; break;
+          case 'g':   lumBuf[i] = lut[src[p + 1]]; break;
+          case 'b':   lumBuf[i] = lut[src[p + 2]]; break;
+          case 'avg': lumBuf[i] = lut[((src[p] + src[p + 1] + src[p + 2]) / 3 + 0.5) | 0]; break;
+          default: {
+            const lin = (0.2126 * src[p] + 0.7152 * src[p + 1] + 0.0722 * src[p + 2] + 0.5) | 0;
+            lumBuf[i] = lut[clampInt(lin, 0, 255)];
+          }
+        }
+      }
+    }
+
+    // Apply brightness and contrast
+    if (brightness !== 0 || contrast !== 1) {
+      if (colorOut) {
+        for (let i = 0; i < NP; i++) {
+          rBuf[i] = clamp01((rBuf[i] - 0.5) * contrast + 0.5 + brightness);
+          gBuf[i] = clamp01((gBuf[i] - 0.5) * contrast + 0.5 + brightness);
+          bBuf[i] = clamp01((bBuf[i] - 0.5) * contrast + 0.5 + brightness);
+        }
+      } else {
+        for (let i = 0; i < NP; i++)
+          lumBuf[i] = clamp01((lumBuf[i] - 0.5) * contrast + 0.5 + brightness);
+      }
+    }
+
+    // ── "none": quantize to nearest level, no dithering ──────────────────────
+    if (method === 'none') {
+      if (colorOut) {
+        for (let i = 0, p = 0; i < NP; i++, p += 4) {
+          let r = Math.round(clamp01(rBuf[i]) * maxQ) / maxQ;
+          let g = Math.round(clamp01(gBuf[i]) * maxQ) / maxQ;
+          let b = Math.round(clamp01(bBuf[i]) * maxQ) / maxQ;
+          if (inv) { r = 1 - r; g = 1 - g; b = 1 - b; }
+          outDataBuf[p]   = (r * 255) | 0;
+          outDataBuf[p+1] = (g * 255) | 0;
+          outDataBuf[p+2] = (b * 255) | 0;
+          outDataBuf[p+3] = 255;
+        }
+      } else {
+        for (let i = 0, p = 0; i < NP; i++, p += 4) {
+          let v = Math.round(clamp01(lumBuf[i]) * maxQ) / maxQ;
+          if (inv) v = 1 - v;
+          const c = (v * 255) | 0;
+          outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+        }
+      }
+      return outImgData;
     }
 
     // ── Error-diffusion methods ───────────────────────────────────────────
@@ -620,35 +742,56 @@
     if (ED_KERNELS[method]) {
       const kernel   = ED_KERNELS[method];
       const quantize = v => Math.round(clamp01(v) * maxQ) / maxQ;
-      for (let y = 0; y < h; y++) {
-        const dir = serp && (y & 1) ? -1 : 1;
-        for (let x = dir === 1 ? 0 : w - 1; x !== (dir === 1 ? w : -1); x += dir) {
-          const i    = y * w + x;
-          const oldv = lumBuf[i];
-          const newv = quantize(oldv);
-          const err  = oldv - newv;
-          lumBuf[i]  = newv;
-          for (const [dxBase, dy, num, den] of kernel) {
-            const nx = x + (dir === 1 ? dxBase : -dxBase);
-            const ny = y + dy;
-            if (nx >= 0 && nx < w && ny < h)
-              lumBuf[ny * w + nx] += err * num / den;
+      const applyED  = (buf) => {
+        for (let y = 0; y < h; y++) {
+          const dir = serp && (y & 1) ? -1 : 1;
+          for (let x = dir === 1 ? 0 : w - 1; x !== (dir === 1 ? w : -1); x += dir) {
+            const i    = y * w + x;
+            const oldv = buf[i];
+            const newv = quantize(oldv);
+            const err  = oldv - newv;
+            buf[i]     = newv;
+            for (const [dxBase, dy, num, den] of kernel) {
+              const nx = x + (dir === 1 ? dxBase : -dxBase);
+              const ny = y + dy;
+              if (nx >= 0 && nx < w && ny < h)
+                buf[ny * w + nx] += err * num / den;
+            }
           }
         }
-      }
-      for (let i = 0, p = 0; i < NP; i++, p += 4) {
-        let v = clamp01(lumBuf[i]); if (inv) v = 1 - v;
-        const c = (v * 255) | 0;
-        outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+      };
+      if (colorOut) {
+        applyED(rBuf);
+        applyED(gBuf);
+        applyED(bBuf);
+        for (let i = 0, p = 0; i < NP; i++, p += 4) {
+          let r = clamp01(rBuf[i]), g = clamp01(gBuf[i]), b = clamp01(bBuf[i]);
+          if (inv) { r = 1 - r; g = 1 - g; b = 1 - b; }
+          outDataBuf[p]   = (r * 255) | 0;
+          outDataBuf[p+1] = (g * 255) | 0;
+          outDataBuf[p+2] = (b * 255) | 0;
+          outDataBuf[p+3] = 255;
+        }
+      } else {
+        applyED(lumBuf);
+        for (let i = 0, p = 0; i < NP; i++, p += 4) {
+          let v = clamp01(lumBuf[i]); if (inv) v = 1 - v;
+          const c = (v * 255) | 0;
+          outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+        }
       }
       return outImgData;
     }
 
     // Ordered / mask-based methods
     let tile, tileN;
-    if      (method === 'bayer')  { tile = bayer;             tileN = Math.sqrt(tile.length) | 0; }
-    else if (method === 'blue')   { tile = blueTile;          tileN = Math.sqrt(tile.length) | 0; }
-    else if (method === 'parker') { tile = parkerTile || blueTile; tileN = Math.sqrt(tile.length) | 0; }
+    if      (method === 'bayer2')  { tile = BAYER2;  tileN = 2; }
+    else if (method === 'bayer4')  { tile = BAYER4;  tileN = 4; }
+    else if (method === 'bayer8')  { tile = BAYER8;  tileN = 8; }
+    else if (method === 'bayer16') { tile = BAYER16; tileN = 16; }
+    else if (method === 'bayer')   { tile = bayer;   tileN = Math.sqrt(bayer.length) | 0; }
+    else if (method === 'blue')    { tile = blueTile; tileN = Math.sqrt(tile.length) | 0; }
+    else if (method === 'parker')  { const pt = parkerTile || blueTile; tile = pt; tileN = Math.sqrt(pt.length) | 0; }
     else {   // gol
       tile  = gol.thresholds; tileN = gol.n;
       const upd = parseInt(golUpdEl.value, 10);
@@ -661,22 +804,42 @@
     const sy = (animBlue && method === 'blue') ? ((t * 29) | 0) : 0;
 
     // Global threshold offset: manual slider is centered at 0.5 -> offset = val-0.5
-    let globalOffset = (typeof thresholdEl !== 'undefined') ? (parseFloat(thresholdEl.value) - 0.5) : 0;
-    if (typeof autoThrEl !== 'undefined' && autoThrEl.checked && (maxQ === 1) && tile && tileN) {
-      globalOffset = computeAutoThreshold(lumBuf, w, h, tile, tileN, maxQ);
+    let globalOffset = parseFloat(thresholdEl.value) - 0.5;
+    if (autoThrEl.checked && (maxQ === 1) && tile && tileN) {
+      const refBuf = colorOut ? rBuf : lumBuf;
+      globalOffset = computeAutoThreshold(refBuf, w, h, tile, tileN, maxQ);
     }
 
-    for (let y = 0; y < h; y++) {
-      const row = y * w;
-      const ty  = (y + sy) % tileN;
-      for (let x = 0; x < w; x++) {
-        let thr  = tile[ty * tileN + ((x + sx) % tileN)] + globalOffset;
-        thr = clamp01(thr);
-        const q    = clampInt((clamp01(lumBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
-        let outv   = q / maxQ; if (inv) outv = 1 - outv;
-        const c    = (outv * 255) | 0;
-        const p    = (row + x) * 4;
-        outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+    if (colorOut) {
+      for (let y = 0; y < h; y++) {
+        const row = y * w;
+        const ty  = (y + sy) % tileN;
+        for (let x = 0; x < w; x++) {
+          const thr = clamp01(tile[ty * tileN + ((x + sx) % tileN)] + globalOffset);
+          const p   = (row + x) * 4;
+          const qr  = clampInt((clamp01(rBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
+          const qg  = clampInt((clamp01(gBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
+          const qb  = clampInt((clamp01(bBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
+          let r = qr / maxQ, g = qg / maxQ, b = qb / maxQ;
+          if (inv) { r = 1 - r; g = 1 - g; b = 1 - b; }
+          outDataBuf[p]   = (r * 255) | 0;
+          outDataBuf[p+1] = (g * 255) | 0;
+          outDataBuf[p+2] = (b * 255) | 0;
+          outDataBuf[p+3] = 255;
+        }
+      }
+    } else {
+      for (let y = 0; y < h; y++) {
+        const row = y * w;
+        const ty  = (y + sy) % tileN;
+        for (let x = 0; x < w; x++) {
+          const thr  = clamp01(tile[ty * tileN + ((x + sx) % tileN)] + globalOffset);
+          const q    = clampInt((clamp01(lumBuf[row + x]) * maxQ + thr) | 0, 0, maxQ);
+          let outv   = q / maxQ; if (inv) outv = 1 - outv;
+          const c    = (outv * 255) | 0;
+          const p    = (row + x) * 4;
+          outDataBuf[p] = outDataBuf[p+1] = outDataBuf[p+2] = c; outDataBuf[p+3] = 255;
+        }
       }
     }
     return outImgData;
@@ -829,13 +992,15 @@
 
   // ── UI bindings ───────────────────────────────────────────────────────────
   function syncLabels() {
-    levelsVal.textContent  = levelsEl.value;
-    scaleVal.textContent   = `${parseFloat(scaleEl.value).toFixed(2)}×`;
-    gammaVal.textContent   = parseFloat(gammaEl.value).toFixed(2);
+    levelsVal.textContent    = levelsEl.value;
+    scaleVal.textContent     = `${parseFloat(scaleEl.value).toFixed(2)}×`;
+    gammaVal.textContent     = parseFloat(gammaEl.value).toFixed(2);
+    brightnessVal.textContent = parseFloat(brightnessEl.value).toFixed(2);
+    contrastVal.textContent  = parseFloat(contrastEl.value).toFixed(2);
     thresholdVal.textContent = parseFloat(thresholdEl.value).toFixed(2);
-    golUpdVal.textContent  = golUpdEl.value;
-    golSizeVal.textContent = golSizeEl.value;
-    maskVal.textContent    = maskSizeEl.value;
+    golUpdVal.textContent    = golUpdEl.value;
+    golSizeVal.textContent   = golSizeEl.value;
+    maskVal.textContent      = maskSizeEl.value;
     setHint();
   }
 
@@ -853,10 +1018,11 @@
 
   saveBtn.addEventListener('click', saveFrame);
 
-  if (typeof autoThrEl !== 'undefined') autoThrEl.addEventListener('change', () => { syncLabels(); });
+  autoThrEl.addEventListener('change', () => { syncLabels(); });
+  colorModeEl.addEventListener('change', () => { syncLabels(); updateSettingsVisibility(); });
 
   methodSel.addEventListener('change', () => { syncLabels(); updateSettingsVisibility(); });
-  [levelsEl, scaleEl, gammaEl, thresholdEl, golUpdEl, golSizeEl, maskSizeEl].forEach(el =>
+  [levelsEl, scaleEl, gammaEl, brightnessEl, contrastEl, thresholdEl, golUpdEl, golSizeEl, maskSizeEl].forEach(el =>
     el.addEventListener('input', () => {
       syncLabels();
       if (el === scaleEl && running) resizeCanvases();
